@@ -36,3 +36,7 @@ vi .env
 
 go with security and add the inbound rule
 add the port 8501
+
+
+python -m venv /path/to/new/virtual/environment
+source venv/bin/activate

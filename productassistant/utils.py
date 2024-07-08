@@ -2,53 +2,36 @@ import os
 import PyPDF2
 import json
 import traceback
+import pinecone
 
-def read_file(file):
-    if file.name.endswith(".pdf"):
-        try:
-            pdf_reader=PyPDF2.PdfReader(file)
-            text=""
-            for page in pdf_reader.pages:
-                text+=page.extract_text()
-            return text
-            
-        except Exception as e:
-            raise Exception("error reading the PDF file")
-        
-    elif file.name.endswith(".txt"):
-        return file.read().decode("utf-8")
-    
-    else:
-        raise Exception(
-            "unsupported file format only pdf and text file suppoted"
-            )
+from langchain.document_loaders import PyPDFDirectoryLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from pinecone import Pinecone, ServerlessSpec
 
-def get_table_data(quiz_str):
+def read_file():
     try:
-        # convert the quiz from a str to dict
-        print("quiz_str = ", quiz_str)
-        # print("json.dumps(quiz_str) = ", json.dumps(quiz_str,indent=2))
-        # quiz_str = json.dumps(quiz_str)
-        quiz_dict=json.loads(quiz_str)
-        quiz_table_data=[]
-        
-        # iterate over the quiz dictionary and extract the required information
-        for key,value in quiz_dict.items():
-            mcq=value["mcq"]
-            options=" || ".join(
-                [
-                    f"{option}-> {option_value}" for option, option_value in value["options"].items()
-                 
-                 ]
-            )
-            
-            correct=value["correct"]
-            quiz_table_data.append({"MCQ": mcq,"Choices": options, "Correct": correct})
-        
-        return quiz_table_data
-        
+        loader = PyPDFDirectoryLoader("pdfs")
+        data=loader.load()            
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
+        text_chunks = text_splitter.split_documents(data)
+        return text_chunks
+    
     except Exception as e:
-        traceback.print_exception(type(e), e, e.__traceback__)
-        return False
+        raise Exception("Error reading the pdf file")
+    
 
+def create_index_in_pinecone(index_name):
+    
+    PINECONE_API_KEY=os.getenv("PINECONE_API_KEY")
 
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+    if index_name not in pc.list_indexes().names():
+        pc.create_index(
+        name=index_name,
+        dimension=1536,
+        metric="cosine",
+        spec=ServerlessSpec(
+            cloud='aws', 
+            region='us-east-1'
+        ) 
+    )

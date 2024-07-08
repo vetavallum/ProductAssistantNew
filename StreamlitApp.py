@@ -1,140 +1,85 @@
 import os
-import json
 import traceback
-import pandas as pd
-from dotenv import load_dotenv
-from productassistant.utils import read_file,get_table_data
+
+from langchain_openai import OpenAIEmbeddings
+from langchain_pinecone import PineconeVectorStore
+from productassistant.utils import create_index_in_pinecone, read_file
 import streamlit as st
 from langchain.callbacks import get_openai_callback
-from productassistant.ProductAssistant import generate_evaluate_chain
 from productassistant.logger import logging
+from pathlib import Path
+from langchain.llms import OpenAI
+from langchain.chains import RetrievalQA
 
-#loading json file
+index_name = "textsearchindex3"
+create_index_in_pinecone(index_name)
 
-with open('Response.json', 'r') as file:
-    RESPONSE_JSON = json.load(file)
+embed_model = "text-embedding-ada-002"
+embeddings = OpenAIEmbeddings(model = embed_model)
+docsearch = PineconeVectorStore(index_name=index_name, embedding=embeddings)
 
-#creating a title for the app
-st.title("MCQs Creator Application with LangChain 🦜⛓️")
 
-#Create a form using st.form
-with st.form("user_inputs"):
-    #File Upload
-    uploaded_file=st.file_uploader("Uplaod a PDF or txt file")
+###################################################################################
+# Chat app code with chatting facility
+###################################################################################
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
     
-    #Text Content Upload
-    # uploaded_text=st.text_input("Insert Text")
-    uploaded_text=st.text_area("Insert Text")
-    # st.write(uploaded_text)
-    #Input Fields
-    mcq_count=st.number_input("No. of MCQs", min_value=3, max_value=50)
+# chat_box = st.chat_input("")
+if prompt := st.chat_input("Ask your question"):
+    # Display user message in chat message container
+    st.chat_message("user").markdown(prompt)
+    # Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    
+    docs = docsearch.similarity_search(prompt)
+    llm = OpenAI()
+    qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever	= docsearch.as_retriever())
+    llmresponse = qa.run(prompt)
+    
+    response = f"Echo: {llmresponse}"
+    # Display assistant response in chat message container
+    with st.chat_message("assistant"):
+        st.markdown(response)
+    # Add assistant response to chat history
+    st.session_state.messages.append({"role": "assistant", "content": response})
+    
+    
+###################################################################################
+# Browse pdf file and upload it in pdf directory
+###################################################################################
 
-    #Subject
-    subject=st.text_input("Insert Subject",max_chars=20)
+if "uploader_visible" not in st.session_state:
+    st.session_state["uploader_visible"] = False
+def show_upload(state:bool):
+    st.session_state["uploader_visible"] = state
+    
+with st.chat_message("system"):
+    cols= st.columns((3,1,1))
+    cols[0].write("Do you want to upload a file?")
+    cols[1].button("yes", use_container_width=True, on_click=show_upload, args=[True])
+    cols[2].button("no", use_container_width=True, on_click=show_upload, args=[False])
 
-    # Quiz Tone
-    tone=st.text_input("Complexity Level Of Questions", max_chars=20, placeholder="Simple")
+if st.session_state["uploader_visible"]:
+    with st.chat_message("system"):
+        uploaded_file = st.file_uploader("Upload a pdf file")
+        if uploaded_file:
+            with st.spinner("Processing your file"):
+                print(uploaded_file)
+                save_folder = './pdfs'
+                save_path = Path(save_folder, uploaded_file.name)
+                print(save_path)
+                with open(save_path, mode='wb') as w:
+                    w.write(uploaded_file.getvalue())
 
-    #Add Button
-    button=st.form_submit_button("Create MCQs")
+                if save_path.exists():
+                    st.success(f'File {uploaded_file.name} is successfully saved!')
 
-    # Check if the button is clicked and all fields have input
-
-    if button and uploaded_file is not None and mcq_count and subject and tone:
-        with st.spinner("loading..."):
-            try:
-                text=read_file(uploaded_file)
-                #Count tokens and the cost of API call
-                with get_openai_callback() as cb:
-                    response=generate_evaluate_chain(
-                        {
-                        "text": text,
-                        "number": mcq_count,
-                        "subject":subject,
-                        "tone": tone,
-                        "response_json": json.dumps(RESPONSE_JSON)
-                            }
-                    )
-                #st.write(response)
-
-            except Exception as e:
-                traceback.print_exception(type(e), e, e.__traceback__)
-                st.error("Error")
-
-            else:
-                print(f"Total Tokens:{cb.total_tokens}")
-                print(f"Prompt Tokens:{cb.prompt_tokens}")
-                print(f"Completion Tokens:{cb.completion_tokens}")
-                print(f"Total Cost:{cb.total_cost}")
-                if isinstance(response, dict):
-                    #Extract the quiz data from the response
-                    quiz=response.get("quiz", None)
-                    print("*******************")
-                    print("quiz = ", quiz)
-                    print("*******************")
-                    quiz=quiz.replace("### RESPONSE_JSON","")
-                    print("*******************")
-                    print("Srinivasan's quiz = ", quiz)
-                    print("*******************")
-                    if quiz is not None:
-                        table_data=get_table_data(quiz)
-                        if table_data is not None and table_data!=False:
-                            df=pd.DataFrame(table_data)
-                            df.index=df.index+1
-                            st.table(df)
-                            #Display the review in atext box as well
-                            st.text_area(label="Review", value=response["review"])
-                        else:
-                            st.error("Error in the table data")
-
-                else:
-                    print('Srinivasan - isinstance returns False')
-                    st.write(response)
-
-
-    if button and uploaded_text and mcq_count and subject and tone:
-        with st.spinner("loading..."):
-            try:
-                text=uploaded_text
-                #Count tokens and the cost of API call
-                with get_openai_callback() as cb:
-                    response=generate_evaluate_chain(
-                        {
-                        "text": text,
-                        "number": mcq_count,
-                        "subject":subject,
-                        "tone": tone,
-                        "response_json": json.dumps(RESPONSE_JSON)
-                            }
-                    )
-                #st.write(response)
-
-            except Exception as e:
-                traceback.print_exception(type(e), e, e.__traceback__)
-                st.error("Error")
-
-            else:
-                print(f"Total Tokens:{cb.total_tokens}")
-                print(f"Prompt Tokens:{cb.prompt_tokens}")
-                print(f"Completion Tokens:{cb.completion_tokens}")
-                print(f"Total Cost:{cb.total_cost}")
-                if isinstance(response, dict):
-                    #Extract the quiz data from the response
-                    quiz=response.get("quiz", None)
-                    quiz.replace("### RESPONSE_JSON","")
-                    print("*******************")
-                    print("Srinivasan's quiz = ", quiz)
-                    print("*******************")
-                    if quiz is not None:
-                        table_data=get_table_data(quiz)
-                        if table_data is not None and table_data!=False:
-                            df=pd.DataFrame(table_data)
-                            df.index=df.index+1
-                            st.table(df)
-                            #Display the review in atext box as well
-                            st.text_area(label="Review", value=response["review"])
-                        else:
-                            st.error("Error in the table data")
-
-                else:
-                    st.write(response)
+text_chunks = read_file()
+print(text_chunks)
+docsearch = PineconeVectorStore.from_documents(text_chunks, embeddings, index_name=index_name)
+                    
